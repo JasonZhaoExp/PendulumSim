@@ -1,0 +1,28 @@
+[simulation]
+# General simulation parameters
+n_strings = 1000
+n_links = 2
+degrees_between = 0.0001
+chaos_mode = true
+g = 9.81
+dt = 0.1
+t_stop = 20
+gif_mode = false
+L = 10.0
+render_history_length = 50
+
+# Rendering options
+render_pendulums = true
+render_endpoints = true
+render_joints = false
+render_base = false
+
+# Colour settings
+color_mode = "rainbow"        # Options: "rainbow", "single", "gradient"
+single_color = "blue"
+grid_color = "black"
+base_color = "black"
+gradient_start = "blue"
+gradient_end = "red"
+bg_color = "black"
+text_color = "white"
