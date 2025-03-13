@@ -8,6 +8,28 @@ import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
 # -------------------------------------------------------------------
+# GPU Acceleration: Use CuPy if available, otherwise fallback to NumPy
+# -------------------------------------------------------------------
+try:
+    import cupy as cp
+
+    xp = cp
+    gpu_enabled = True
+    print("GPU acceleration enabled with CuPy.")
+except ImportError:
+    xp = np
+    gpu_enabled = False
+    print("CuPy not available, using NumPy for computations.")
+
+
+def to_cpu(x):
+    """Convert an array from GPU (CuPy) to CPU (NumPy) if needed."""
+    if gpu_enabled and xp is cp:
+        return cp.asnumpy(x)
+    return x
+
+
+# -------------------------------------------------------------------
 # TOML loader helper
 # -------------------------------------------------------------------
 try:
@@ -51,36 +73,35 @@ class PendulumString:
         self.n_links = n_links
         self.L = L
         self.dt = dt
-        self.base = np.array(base, dtype=np.float64)
+        self.base = xp.array(base, dtype=xp.float64)
 
-        self.positions = np.zeros((n_links + 1, 2), dtype=np.float64)
+        self.positions = xp.zeros((n_links + 1, 2), dtype=xp.float64)
         self.positions[0] = self.base
-        self.prev_positions = np.zeros_like(self.positions, dtype=np.float64)
+        self.prev_positions = xp.zeros_like(self.positions, dtype=xp.float64)
 
         # Initialize joints along a straight line.
         for i in range(1, n_links + 1):
             if chaos_mode:
-                # In chaos mode, use the unstable configuration without any random perturbation.
-                theta = np.pi + base_angle
+                theta = xp.pi + base_angle
             else:
                 theta = base_angle
-            disp = np.array([np.sin(theta), -np.cos(theta)], dtype=np.float64) * L
+            disp = xp.array([xp.sin(theta), -xp.cos(theta)], dtype=xp.float64) * L
             self.positions[i] = self.positions[i - 1] + disp
 
-        self.prev_positions = np.copy(self.positions)
+        self.prev_positions = xp.copy(self.positions)
         self.history = deque(maxlen=history_length)
-        self.history.append(self.positions[-1].copy())
+        self.history.append(xp.copy(self.positions[-1]))
 
     def step(self, g):
-        acc = np.array([0, -g], dtype=np.float64)
-        new_positions = np.copy(self.positions)
+        acc = xp.array([0, -g], dtype=xp.float64)
+        new_positions = xp.copy(self.positions)
         for i in range(1, self.n_links + 1):
             new_positions[i] = (
                 self.positions[i]
                 + (self.positions[i] - self.prev_positions[i])
                 + acc * (self.dt**2)
             )
-        self.prev_positions[1:] = np.copy(self.positions[1:])
+        self.prev_positions[1:] = xp.copy(self.positions[1:])
         self.positions[1:] = new_positions[1:]
         # Enforce constraints (iterate several times)
         for _ in range(10):
@@ -88,7 +109,7 @@ class PendulumString:
                 p1 = self.positions[i]
                 p2 = self.positions[i + 1]
                 delta = p2 - p1
-                dist = np.linalg.norm(delta)
+                dist = xp.linalg.norm(delta)
                 if dist == 0:
                     continue
                 diff = (dist - self.L) / dist
@@ -97,13 +118,13 @@ class PendulumString:
                 else:
                     self.positions[i] += 0.5 * delta * diff
                     self.positions[i + 1] -= 0.5 * delta * diff
-        self.history.append(self.positions[-1].copy())
+        self.history.append(xp.copy(self.positions[-1]))
 
     def get_positions(self):
-        return self.positions
+        return to_cpu(self.positions)
 
     def get_history(self):
-        return np.array(self.history)
+        return to_cpu(xp.array(self.history))
 
 
 # -------------------------------------------------------------------
@@ -113,40 +134,40 @@ class SinglePendulumString:
     def __init__(
         self, base, base_angle, L=1.0, chaos_mode=False, dt=0.01, history_length=50
     ):
-        self.base = np.array(base, dtype=np.float64)
+        self.base = xp.array(base, dtype=xp.float64)
         self.L = L
         self.dt = dt
         if chaos_mode:
-            self.theta = np.float64(np.pi + base_angle)
+            self.theta = xp.float64(xp.pi + base_angle)
         else:
-            self.theta = np.float64(base_angle)
-        self.omega = np.float64(0.0)
+            self.theta = xp.float64(base_angle)
+        self.omega = xp.float64(0.0)
         self.history = deque(maxlen=history_length)
-        self.history.append(self.get_positions()[-1].copy())
+        self.history.append(xp.copy(self.get_positions()[-1]))
 
     def step(self, g):
         dt = self.dt
 
         def f(state):
             theta, omega = state
-            return np.array([omega, -g / self.L * np.sin(theta)], dtype=np.float64)
+            return xp.array([omega, -g / self.L * xp.sin(theta)], dtype=xp.float64)
 
-        state = np.array([self.theta, self.omega], dtype=np.float64)
+        state = xp.array([self.theta, self.omega], dtype=xp.float64)
         k1 = dt * f(state)
         k2 = dt * f(state + 0.5 * k1)
         k3 = dt * f(state + 0.5 * k2)
         k4 = dt * f(state + k3)
         state = state + (k1 + 2 * k2 + 2 * k3 + k4) / 6.0
         self.theta, self.omega = state
-        self.history.append(self.get_positions()[-1].copy())
+        self.history.append(xp.copy(self.get_positions()[-1]))
 
     def get_positions(self):
-        x_end = self.base[0] + self.L * np.sin(self.theta)
-        y_end = self.base[1] - self.L * np.cos(self.theta)
-        return np.array([self.base, [x_end, y_end]], dtype=np.float64)
+        x_end = self.base[0] + self.L * xp.sin(self.theta)
+        y_end = self.base[1] - self.L * xp.cos(self.theta)
+        return to_cpu(xp.array([self.base, [x_end, y_end]], dtype=xp.float64))
 
     def get_history(self):
-        return np.array(self.history)
+        return to_cpu(xp.array(self.history))
 
 
 # -------------------------------------------------------------------
@@ -156,19 +177,19 @@ class DoublePendulumString:
     def __init__(
         self, base, base_angle, L=1.0, chaos_mode=False, dt=0.01, history_length=50
     ):
-        self.base = np.array(base, dtype=np.float64)
+        self.base = xp.array(base, dtype=xp.float64)
         self.L = L
         self.dt = dt
         if chaos_mode:
-            self.theta1 = np.float64(np.pi + base_angle)
-            self.theta2 = np.float64(np.pi + base_angle)
+            self.theta1 = xp.float64(xp.pi + base_angle)
+            self.theta2 = xp.float64(xp.pi + base_angle)
         else:
-            self.theta1 = np.float64(base_angle)
-            self.theta2 = np.float64(base_angle)
-        self.omega1 = np.float64(0.0)
-        self.omega2 = np.float64(0.0)
+            self.theta1 = xp.float64(base_angle)
+            self.theta2 = xp.float64(base_angle)
+        self.omega1 = xp.float64(0.0)
+        self.omega2 = xp.float64(0.0)
         self.history = deque(maxlen=history_length)
-        self.history.append(self.get_positions()[-1].copy())
+        self.history.append(xp.copy(self.get_positions()[-1]))
 
     def step(self, g):
         dt = self.dt
@@ -179,24 +200,24 @@ class DoublePendulumString:
             delta = theta1 - theta2
             dtheta1 = omega1
             dtheta2 = omega2
-            denom = L * (2 - np.cos(2 * delta))
+            denom = L * (2 - xp.cos(2 * delta))
             domega1 = (
-                -g * (2 * np.sin(theta1) + np.sin(theta1 - 2 * theta2))
-                - 2 * np.sin(delta) * (omega2**2 * L + omega1**2 * L * np.cos(delta))
+                -g * (2 * xp.sin(theta1) + xp.sin(theta1 - 2 * theta2))
+                - 2 * xp.sin(delta) * (omega2**2 * L + omega1**2 * L * xp.cos(delta))
             ) / denom
             domega2 = (
                 2
-                * np.sin(delta)
+                * xp.sin(delta)
                 * (
                     2 * omega1**2 * L
-                    + 2 * g * np.cos(theta1)
-                    + omega2**2 * L * np.cos(delta)
+                    + 2 * g * xp.cos(theta1)
+                    + omega2**2 * L * xp.cos(delta)
                 )
             ) / denom
-            return np.array([dtheta1, dtheta2, domega1, domega2], dtype=np.float64)
+            return xp.array([dtheta1, dtheta2, domega1, domega2], dtype=xp.float64)
 
-        state = np.array(
-            [self.theta1, self.theta2, self.omega1, self.omega2], dtype=np.float64
+        state = xp.array(
+            [self.theta1, self.theta2, self.omega1, self.omega2], dtype=xp.float64
         )
         k1 = dt * f(state)
         k2 = dt * f(state + 0.5 * k1)
@@ -204,19 +225,19 @@ class DoublePendulumString:
         k4 = dt * f(state + k3)
         state = state + (k1 + 2 * k2 + 2 * k3 + k4) / 6.0
         self.theta1, self.theta2, self.omega1, self.omega2 = state
-        self.history.append(self.get_positions()[-1].copy())
+        self.history.append(xp.copy(self.get_positions()[-1]))
 
     def get_positions(self):
-        x1 = self.base[0] + self.L * np.sin(self.theta1)
-        y1 = self.base[1] - self.L * np.cos(self.theta1)
-        joint = np.array([x1, y1], dtype=np.float64)
-        x2 = x1 + self.L * np.sin(self.theta2)
-        y2 = y1 - self.L * np.cos(self.theta2)
-        endpoint = np.array([x2, y2], dtype=np.float64)
-        return np.array([self.base, joint, endpoint], dtype=np.float64)
+        x1 = self.base[0] + self.L * xp.sin(self.theta1)
+        y1 = self.base[1] - self.L * xp.cos(self.theta1)
+        joint = xp.array([x1, y1], dtype=xp.float64)
+        x2 = x1 + self.L * xp.sin(self.theta2)
+        y2 = y1 - self.L * xp.cos(self.theta2)
+        endpoint = xp.array([x2, y2], dtype=xp.float64)
+        return to_cpu(xp.array([self.base, joint, endpoint], dtype=xp.float64))
 
     def get_history(self):
-        return np.array(self.history)
+        return to_cpu(xp.array(self.history))
 
 
 # -------------------------------------------------------------------
@@ -229,14 +250,12 @@ class OptimizedPendulumSimulation:
         self.n_strings = n_strings
         self.n_links = n_links
         self.strings = []
-        common_base = np.array([0, 0], dtype=np.float64)
-        # In chaos mode, shift the base angle by one step so that the first string starts with the angle
-        # that the second one normally would.
+        common_base = [0, 0]  # keep as list for consistency
         for i in range(n_strings):
             if chaos_mode:
-                base_angle = np.deg2rad((i + 1) * degrees_between)
+                base_angle = xp.deg2rad((i + 1) * degrees_between)
             else:
-                base_angle = np.deg2rad(i * degrees_between)
+                base_angle = xp.deg2rad(i * degrees_between)
             if n_links == 1:
                 self.strings.append(
                     SinglePendulumString(
